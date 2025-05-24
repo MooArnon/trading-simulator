@@ -175,3 +175,5 @@ cython_debug/
 
 
 local/
+run_local.py
+*.csv

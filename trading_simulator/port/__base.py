@@ -1,209 +1,128 @@
-##########
-# Import #
-##############################################################################
-
 import logging
-
-#########
-# Class #
-##############################################################################
 
 class BasePort:
     """
     Base portfolio class for simulating leveraged trading with maker and taker fees.
-
-    Parameters
-    ----------
-    initial_value : float
-        The initial capital of the portfolio.
-    taker_fee : float
-        Transaction fee rate when closing a position.
-    maker_fee : float
-        Transaction fee rate when opening a position.
-    leverage : int, optional
-        The leverage factor to apply when opening positions. Defaults to 1 (no leverage).
-
-    Attributes
-    ----------
-    initial_value : float
-        The initial portfolio value.
-    current_value : float
-        The current portfolio value after trades and fees.
-    leverage : int
-        Leverage factor used for trading.
-    taker_fee : float
-        Fee rate applied when closing a position.
-    maker_fee : float
-        Fee rate applied when opening a position.
-    position : str or None
-        Current open position ('LONG', 'SHORT', or None).
-    entry_price : float or None
-        The entry price at which the current position was opened.
-    position_size : float
-        Dollar size of the current open position (can be larger than current value due to leverage).
     """
     def __init__(
-            self, 
-            initial_value: float,
-            taker_fee: float,
-            maker_fee: float,
-            logger: logging.Logger,
-            leverage: int = None,
-            buy_ratio: float = 0.8,
+        self,
+        initial_value: float,
+        taker_fee: float,
+        maker_fee: float,
+        logger: logging.Logger,
+        leverage: int = 1,
+        buy_ratio: float = 0.8,
     ) -> None:
+        self.initial_value = initial_value
         self.current_value = initial_value
-        self.leverage = leverage if leverage is not None else 1
+        self.leverage = leverage
         self.taker_fee = taker_fee
         self.maker_fee = maker_fee
-        
         self.buy_ratio = buy_ratio
-        
         self.logger = logger
-        
-        # dollar value of position
-        self.set_position("HODL")
-        self.set_position_size(0)
-    
-    ##############
-    # Properties #
-    ##########################################################################
-    
+
+        self.__position = "HODL"
+        self.__entry_price = None
+        self.__position_size = 0
+        self.__capital_used = 0
+
     @property
     def position(self) -> str:
         return self.__position
 
-    ##########################################################################
-    
-    def set_position(self, position: str) -> None:
-        self.__position = position
-        
-    ##########################################################################
-    
     @property
     def entry_price(self) -> float:
         return self.__entry_price
-    
-    ##########################################################################
-    
-    def set_entry_price(self, entry_price: str) -> None:
-        self.__entry_price = entry_price
-        
-    ##########################################################################
-    
-    @property
-    def position_size(self) -> str:
-        return self.__position_size
-    
-    ##########################################################################
 
-    def set_position_size(self, position_size: str) -> None:
-        self.__position_size = position_size
+    @property
+    def position_size(self) -> float:
+        return self.__position_size
+
+    @property
+    def capital_used(self) -> float:
+        return self.__capital_used
+
+    def set_position(self, position: str) -> None:
+        self.__position = position
+
+    def set_entry_price(self, price: float) -> None:
+        self.__entry_price = price
+
+    def set_position_size(self, size: float) -> None:
+        self.__position_size = size
+
+    def set_capital_used(self, capital: float) -> None:
+        self.__capital_used = capital
 
     ##########################################################################
     
     def open_position(self, position: str, price: float) -> None:
-        """
-        Open a new trading position.
-
-        Parameters
-        ----------
-        direction : str
-            Direction of the position, either 'LONG' or 'SHORT'.
-        price : float
-            The price at which the position is opened.
-
-        Raises
-        ------
-        Exception
-            If there is already an open position.
-        """
-        if self.position != 'HODL':
+        self.logger.info(f"Position changes from {self.position} to {position}")
+        if self.position != "HODL":
             self.close_position(price)
-        
+
         self.set_entry_price(price)
         self.set_position(position)
-        
+
         buy_power = self.buy_ratio * self.current_value
-        
-        # Choose the worse fee as a safety factor
-        notional_value = buy_power * self.leverage 
-        fee = notional_value * self.taker_fee
-        
+        self.set_capital_used(buy_power)
+
+        notional_value = buy_power * self.leverage
+        fee = notional_value * self.maker_fee
         self.current_value -= fee
-        
-        # Buying power / price
-        # position_size is how many asset unit (one asset) you get
-        self.set_position_size(notional_value/price)
-        
-        self.logger.info(f"position changes from {self.position} to {position}")
+
+        self.set_position_size(notional_value / price)
+
         self.logger.info(f"Entered price: {self.entry_price}")
         self.logger.debug(f"Buy power: {buy_power}")
-        self.logger.debug(f"notional_value: {notional_value}")
-        self.logger.debug(f"fee: {fee}")
-        self.logger.debug(f"current_value: {self.current_value}")
-        
+        self.logger.debug(f"Notional value: {notional_value}")
+        self.logger.debug(f"Maker fee: {fee}")
+        self.logger.debug(f"Current value after fee: {self.current_value}")
+
     ##########################################################################
     
     def close_position(self, price: float) -> None:
-        """
-        Close the current open trading position.
-
-        Parameters
-        ----------
-        price : float
-            The price at which the position is closed.
-
-        Raises
-        ------
-        Exception
-            If there is no open position to close.
-        """
-        if self.position is None:
+        if self.position == "HODL":
             raise Exception("No open position to close.")
-        
-        if self.position == 'LONG':
-            pnl = (price - self.entry_price) * self.position_size
-        elif self.position == 'SHORT':
-            pnl = (self.entry_price - price) * self.position_size
-        elif self.position == 'HODL':
-            return
-        else:
-            raise Exception("Invalid position type.")
-        
+
+        pnl = self.calculate_pnl(price)
         self.current_value += pnl
-        
-        fee = abs(self.position_size) * self.taker_fee * price
+
+        fee = abs(self.position_size) * price * self.taker_fee
         self.current_value -= fee
-        
-        self.set_position(None)
+
+        self.set_position("HODL")
         self.set_entry_price(None)
         self.set_position_size(0)
-        
+        self.set_capital_used(0)
+
+        self.logger.debug(f"PnL: {pnl}")
+        self.logger.debug(f"Taker fee: {fee}")
+        self.logger.debug(f"Current value after closing: {self.current_value}")
+
     ##########################################################################
     
-    def get_port_value(self) -> float:
-        """
-        Get the current portfolio value.
+    def calculate_pnl(self, price: float) -> float:
+        if self.position == "LONG":
+            return (price - self.entry_price) * self.position_size
+        elif self.position == "SHORT":
+            return (self.entry_price - price) * self.position_size
+        else:
+            return 0
 
-        Returns
-        -------
-        float
-            The current portfolio value after trades and fees.
-        """
+    def calculate_roi(self, price: float) -> float:
+        if self.position == "HODL" or self.capital_used == 0:
+            return 0
+
+        pnl = self.calculate_pnl(price)
+        return (pnl / self.capital_used) * 100
+
+    def get_port_value(self) -> float:
         return self.current_value
 
-    ##########################################################################
-    
     def reset(self) -> None:
-        """
-        Reset the portfolio to its initial state.
-
-        Resets the current value to the initial value and clears any open position.
-        """
-        self.position = None
-        self.entry_price = None
-        self.position_size = 0
-    
-    ##########################################################################
-
-##############################################################################
+        self.__position = "HODL"
+        self.__entry_price = None
+        self.__position_size = 0
+        self.__capital_used = 0
+        self.current_value = self.initial_value
